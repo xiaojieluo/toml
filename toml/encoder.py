@@ -44,12 +44,12 @@ def dumps(o, encoder=None):
     retval = ""
     if encoder is None:
         encoder = TomlEncoder(o.__class__)
-    addtoretval, sections = encoder._dump_sections(o, "")
+    addtoretval, sections = encoder.dump_sections(o, "")
     retval += addtoretval
     while sections:
         newsections = encoder.get_empty_table()
         for section in sections:
-            addtoretval, addtosections = encoder._dump_sections(
+            addtoretval, addtosections = encoder.dump_sections(
                 sections[section], section)
 
             if addtoretval or (not addtoretval and not addtosections):
@@ -64,16 +64,81 @@ def dumps(o, encoder=None):
     return retval
 
 
+def _dump_str(v):
+    v = "%r" % v
+    if v[0] == 'u':
+        v = v[1:]
+    singlequote = v.startswith("'")
+    v = v[1:-1]
+    if singlequote:
+        v = v.replace("\\'", "'")
+        v = v.replace('"', '\\"')
+    v = v.replace("\\x", "\\u00")
+    return unicode('"' + v + '"')
+
+
+def _dump_float(v):
+    return "{0:.16}".format(v).replace("e+0", "e+").replace("e-0", "e-")
+
+
 class TomlEncoder(object):
 
     def __init__(self, _dict=dict, preserve=False):
         self._dict = _dict
         self.preserve = preserve
+        self.dump_funcs = {
+            str: _dump_str,
+            unicode: _dump_str,
+            list: self.dump_list,
+            bool: lambda v: unicode(v).lower(),
+            float: _dump_float,
+            datetime.datetime: lambda v: v.isoformat(),
+        }
 
     def get_empty_table(self):
         return self._dict()
 
-    def _dump_sections(self, o, sup):
+    def dump_list(self, v):
+        t = []
+        retval = "["
+        for u in v:
+            t.append(self.dump_value(u))
+        while t != []:
+            s = []
+            for u in t:
+                if isinstance(u, list):
+                    for r in u:
+                        s.append(r)
+                else:
+                    retval += " " + unicode(u) + ","
+            t = s
+        retval += "]"
+        return retval
+
+    def dump_inline_table(self, section):
+        """Preserve inline table in its compact syntax instead of expanding
+        into subsection.
+
+        https://github.com/toml-lang/toml#user-content-inline-table
+        """
+        retval = ""
+        if isinstance(section, dict):
+            val_list = []
+            for k, v in section.items():
+                val = self.dump_inline_table(v)
+                val_list.append(k + " = " + val)
+            retval += "{ " + ", ".join(val_list) + " }\n"
+            return retval
+        else:
+            return unicode(self.dump_value(section))
+
+    def dump_value(self, v):
+        # Lookup function corresponding to v's type
+        dump_fn = self.dump_funcs.get(type(v))
+        # Evaluate function (if it exists) else return v
+        return dump_fn(v) if dump_fn is not None else v
+
+    def dump_sections(self, o, sup):
         retstr = ""
         if sup != "" and sup[-1] != ".":
             sup += '.'
@@ -97,7 +162,7 @@ class TomlEncoder(object):
                     for a in o[section]:
                         arraytabstr = "\n"
                         arraystr += "[[" + sup + qsection + "]]\n"
-                        s, d = self._dump_sections(a, sup + qsection)
+                        s, d = self.dump_sections(a, sup + qsection)
                         if s:
                             if s[0] == "[":
                                 arraytabstr += s
@@ -106,9 +171,9 @@ class TomlEncoder(object):
                         while d:
                             newd = self._dict()
                             for dsec in d:
-                                s1, d1 = self._dump_sections(d[dsec], sup +
-                                                             qsection + "." +
-                                                             dsec)
+                                s1, d1 = self.dump_sections(d[dsec], sup +
+                                                            qsection + "." +
+                                                            dsec)
                                 if s1:
                                     arraytabstr += ("[" + sup + qsection +
                                                     "." + dsec + "]\n")
@@ -120,78 +185,11 @@ class TomlEncoder(object):
                 else:
                     if o[section] is not None:
                         retstr += (qsection + " = " +
-                                   unicode(_dump_value(o[section])) + '\n')
+                                   unicode(self.dump_value(o[section])) + '\n')
             elif self.preserve and isinstance(o[section], InlineTableDict):
-                retstr += (qsection + " = " + _dump_inline_table(o[section]))
+                retstr += (qsection + " = " +
+                           self.dump_inline_table(o[section]))
             else:
                 retdict[qsection] = o[section]
         retstr += arraystr
         return (retstr, retdict)
-
-
-def _dump_inline_table(section):
-    """Preserve inline table in its compact syntax instead of expanding
-    into subsection.
-
-    https://github.com/toml-lang/toml#user-content-inline-table
-    """
-    retval = ""
-    if isinstance(section, dict):
-        val_list = []
-        for k, v in section.items():
-            val = _dump_inline_table(v)
-            val_list.append(k + " = " + val)
-        retval += "{ " + ", ".join(val_list) + " }\n"
-        return retval
-    else:
-        return unicode(_dump_value(section))
-
-
-def _dump_value(v):
-    dump_funcs = {
-        str: lambda: _dump_str(v),
-        unicode: lambda: _dump_str(v),
-        list: lambda: _dump_list(v),
-        bool: lambda: unicode(v).lower(),
-        float: lambda: _dump_float(v),
-        datetime.datetime: lambda: v.isoformat(),
-    }
-    # Lookup function corresponding to v's type
-    dump_fn = dump_funcs.get(type(v))
-    # Evaluate function (if it exists) else return v
-    return dump_fn() if dump_fn is not None else v
-
-
-def _dump_str(v):
-    v = "%r" % v
-    if v[0] == 'u':
-        v = v[1:]
-    singlequote = v.startswith("'")
-    v = v[1:-1]
-    if singlequote:
-        v = v.replace("\\'", "'")
-        v = v.replace('"', '\\"')
-    v = v.replace("\\x", "\\u00")
-    return unicode('"' + v + '"')
-
-
-def _dump_list(v):
-    t = []
-    retval = "["
-    for u in v:
-        t.append(_dump_value(u))
-    while t != []:
-        s = []
-        for u in t:
-            if isinstance(u, list):
-                for r in u:
-                    s.append(r)
-            else:
-                retval += " " + unicode(u) + ","
-        t = s
-    retval += "]"
-    return retval
-
-
-def _dump_float(v):
-    return "{0:.16}".format(v).replace("e+0", "e+").replace("e-0", "e-")
