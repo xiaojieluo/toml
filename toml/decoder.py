@@ -572,53 +572,9 @@ class TomlDecoder(object):
         elif v == 'false':
             return (False, "bool")
         elif v[0] == '"':
-            testv = v[1:].split('"')
-            if testv[0] == '' and testv[1] == '':
-                testv = testv[2:-2]
-            closed = False
-            for tv in testv:
-                if tv == '':
-                    closed = True
-                else:
-                    oddbackslash = False
-                    try:
-                        i = -1
-                        j = tv[i]
-                        while j == '\\':
-                            oddbackslash = not oddbackslash
-                            i -= 1
-                            j = tv[i]
-                    except IndexError:
-                        pass
-                    if not oddbackslash:
-                        if closed:
-                            raise TomlDecodeError("Stuff after closed string. "
-                                                  "WTF?")
-                        else:
-                            closed = True
-            escapeseqs = v.split('\\')[1:]
-            backslash = False
-            for i in escapeseqs:
-                if i == '':
-                    backslash = not backslash
-                else:
-                    if i[0] not in _escapes and (i[0] != 'u' and i[0] != 'U' and
-                                                 not backslash):
-                        raise TomlDecodeError("Reserved escape sequence used")
-                    if backslash:
-                        backslash = False
-            for prefix in ["\\u", "\\U"]:
-                if prefix in v:
-                    hexbytes = v.split(prefix)
-                    v = _load_unicode_escapes(hexbytes[0], hexbytes[1:], prefix)
-            v = _unescape(v)
-            if v[1] == '"' and (len(v) < 3 or v[1] == v[2]):
-                v = v[2:-2]
-            return (v[1:-1], "str")
+            return self._load_basic_string(v)
         elif v[0] == "'":
-            if v[1] == "'" and (len(v) < 3 or v[1] == v[2]):
-                v = v[2:-2]
-            return (v[1:-1], "str")
+            return self._load_literal_string(v)
         elif v[0] == '[':
             return (self._load_array(v), "array")
         elif v[0] == '{':
@@ -626,34 +582,87 @@ class TomlDecoder(object):
             self._load_inline_object(v, inline_object)
             return (inline_object, "inline_object")
         else:
-            parsed_date = _load_date(v)
-            if parsed_date is not None:
-                return (parsed_date, "date")
-            if not strictly_valid:
-                raise TomlDecodeError("Weirdness with leading zeroes or "
-                                      "underscores in your number.")
-            itype = "int"
-            neg = False
-            if v[0] == '-':
-                neg = True
-                v = v[1:]
-            elif v[0] == '+':
-                v = v[1:]
-            v = v.replace('_', '')
-            if '.' in v or 'e' in v or 'E' in v:
-                if '.' in v and v.split('.', 1)[1] == '':
-                    raise TomlDecodeError("This float is missing digits after "
-                                          "the point")
-                if v[0] not in '0123456789':
-                    raise TomlDecodeError("This float doesn't have a leading "
-                                          "digit")
-                v = float(v)
-                itype = "float"
+            return self._load_numeric(v, strictly_valid)
+
+    def _load_numeric(self, v, strictly_valid):
+        parsed_date = _load_date(v)
+        if parsed_date is not None:
+            return (parsed_date, "date")
+        if not strictly_valid:
+            raise TomlDecodeError("Weirdness with leading zeroes or "
+                                  "underscores in your number.")
+        itype = "int"
+        neg = False
+        if v[0] == '-':
+            neg = True
+            v = v[1:]
+        elif v[0] == '+':
+            v = v[1:]
+        v = v.replace('_', '')
+        if '.' in v or 'e' in v or 'E' in v:
+            if '.' in v and v.split('.', 1)[1] == '':
+                raise TomlDecodeError("This float is missing digits after "
+                                      "the point")
+            if v[0] not in '0123456789':
+                raise TomlDecodeError("This float doesn't have a leading "
+                                      "digit")
+            v = float(v)
+            itype = "float"
+        else:
+            v = int(v)
+        if neg:
+            return (0 - v, itype)
+        return (v, itype)
+
+    def _load_basic_string(self, v):
+        testv = v[1:].split('"')
+        if testv[0] == '' and testv[1] == '':
+            testv = testv[2:-2]
+        closed = False
+        for tv in testv:
+            if tv == '':
+                closed = True
             else:
-                v = int(v)
-            if neg:
-                return (0 - v, itype)
-            return (v, itype)
+                oddbackslash = False
+                try:
+                    i = -1
+                    j = tv[i]
+                    while j == '\\':
+                        oddbackslash = not oddbackslash
+                        i -= 1
+                        j = tv[i]
+                except IndexError:
+                    pass
+                if not oddbackslash:
+                    if closed:
+                        raise TomlDecodeError("Stuff after closed string. "
+                                              "WTF?")
+                    else:
+                        closed = True
+        escapeseqs = v.split('\\')[1:]
+        backslash = False
+        for i in escapeseqs:
+            if i == '':
+                backslash = not backslash
+            else:
+                if i[0] not in _escapes and (i[0] != 'u' and i[0] != 'U' and
+                                             not backslash):
+                    raise TomlDecodeError("Reserved escape sequence used")
+                if backslash:
+                    backslash = False
+        for prefix in ["\\u", "\\U"]:
+            if prefix in v:
+                hexbytes = v.split(prefix)
+                v = _load_unicode_escapes(hexbytes[0], hexbytes[1:], prefix)
+        v = _unescape(v)
+        if v[1] == '"' and (len(v) < 3 or v[1] == v[2]):
+            v = v[2:-2]
+        return (v[1:-1], "str")
+
+    def _load_literal_string(self, v):
+        if v[1] == "'" and (len(v) < 3 or v[1] == v[2]):
+            v = v[2:-2]
+        return (v[1:-1], "str")
 
     def _load_array(self, a):
         atype = None
