@@ -20,6 +20,14 @@ def test_simple_str():
     assert o == toml.loads(toml.dumps(o))
 
 
+def test__dict():
+    class TestDict(dict):
+        pass
+
+    assert isinstance(toml.loads(
+        TEST_STR, _dict=TestDict), TestDict)
+
+
 def test_dict_decoder():
     class TestDict(dict):
         pass
